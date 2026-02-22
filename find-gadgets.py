@@ -146,6 +146,89 @@ class Gadgetizer:
                     f.write(f"{gadget}\n")
 
 
+def add_ropper_gadgets(ropper_addresses: set, in_file, outfile, bad_bytes, base_address=None):
+    """ ropper often finds different gadgets and handles base addresses correctly with -I flag """
+    ropper_bin = shutil.which('ropper')
+    
+    if not ropper_bin:
+        print(f"[bright_yellow][*][/bright_yellow] ropper not found in PATH, skipping ropper CLI gadget search")
+        return None
+    
+    print(f"[bright_cyan][*][/bright_cyan] Using ropper at: {ropper_bin}")
+    
+    # Create separate output file for ropper CLI results
+    ropper_outfile = f"ropper-{Path(outfile).name}"
+    
+    # Clear cache first as separate command to ensure fresh gadgets
+    print(f"[bright_cyan][*][/bright_cyan] Clearing ropper cache for {in_file}")
+    clear_result = subprocess.run(
+        [ropper_bin, '--file', in_file, '--clear-cache'],
+        capture_output=True,
+        text=True
+    )
+    
+    if clear_result.returncode != 0:
+        print(f"[bright_yellow][*][/bright_yellow] Cache clear warning: {clear_result.stderr}")
+    
+    with tempfile.TemporaryFile(mode='w+', suffix='osed-rop') as tmp_file, open(ropper_outfile, 'w') as rf:
+        # Build command - place -I flag right after --file for better compatibility
+        command = [ropper_bin, '--file', in_file]
+        
+        if base_address:
+            command.extend(['-I', base_address])
+        
+        command.append('--nocolor')
+        
+        if bad_bytes:
+            bad_bytes_str = ''.join(bad_bytes)
+            command.extend(['--badbytes', bad_bytes_str])
+        
+        print(f"[bright_green][+][/bright_green] running '{' '.join(command)}'")
+        result = subprocess.run(command, stdout=tmp_file, stderr=subprocess.PIPE, text=True)
+        
+        if result.returncode != 0:
+            print(f"[bright_red][!][/bright_red] ropper failed with error: {result.stderr}")
+            return None
+        
+        tmp_file.seek(0)
+        
+        gadget_count = 0
+        first_address = None
+        
+        # Write to both ropper-specific file and main output file
+        for line in tmp_file.readlines():
+            if not line.startswith('0x'):
+                continue
+            
+            ropper_address = line.split(':')[0]
+            
+            if first_address is None:
+                first_address = ropper_address
+            
+            truncated = line.rsplit(';', maxsplit=1)[0]
+            
+            # Always write to ropper-specific file
+            rf.write(f'{truncated}\n')
+            gadget_count += 1
+            
+            # Only write to main file if not duplicate
+            if ropper_address not in ropper_addresses:
+                with open(outfile, 'a') as af:
+                    af.write(f'{truncated}\n')
+        
+        if first_address and base_address:
+            # Verify the addresses look correct
+            if first_address.startswith(base_address[:6]):
+                print(f"[bright_green][✓][/bright_green] ropper CLI addresses verified correct (starting with {base_address[:6]})")
+            else:
+                print(f"[bright_yellow][*][/bright_yellow] ropper addresses start with {first_address[:6]} (expected {base_address[:6]})")
+                print(f"[bright_yellow][*][/bright_yellow] Note: ropper CLI -I flag may not work via subprocess. Manual command works: ropper --file {in_file} -I {base_address}")
+        
+        print(f"[bright_cyan][*][/bright_cyan] ropper CLI found {gadget_count} gadgets")
+    
+    return ropper_outfile
+
+
 def add_missing_gadgets(ropper_addresses: set, in_file, outfile, bad_bytes, base_address=None):
     """ for w/e reason rp++ finds signficantly more gadgets, this function adds them to ropper's dump of all gadgets """
     fname = ''
@@ -279,6 +362,19 @@ def main(args):
     if args.skip_rp:
         return
 
+    ropper_output_files = []
+    
+    for file in args.files:
+        if ":" in file:
+            file, base = file.split(":")
+            ropper_file = add_ropper_gadgets(g.addresses, file, args.output, bad_bytes=args.bad_chars, base_address=base)
+        else:
+            ropper_file = add_ropper_gadgets(g.addresses, file, args.output, bad_bytes=args.bad_chars)
+        
+        if ropper_file:
+            ropper_output_files.append(ropper_file)
+
+    # Run rp++ for additional gadgets
     for file in args.files:
         if ":" in file:
             file, base = file.split(":")
@@ -288,6 +384,12 @@ def main(args):
 
     clean_up_all_gadgets(args.output)
     print_useful_regex(args.output, args.arch)
+    
+    # Print info about ropper-specific output files
+    if ropper_output_files:
+        print(f"\n[bright_green][+][/bright_green] Ropper CLI gadgets also written to:")
+        for rf in set(ropper_output_files):
+            print(f"    [bright_blue]{rf}[/bright_blue]")
 
 
 if __name__ == "__main__":
